@@ -1,10 +1,11 @@
 ## Interface: 120001
 ## Title: TrinketTracker
-## Notes: Tracks your Trinket Cooldown
-## Author: Naíxx
-## Version: 1.0.1
+## Notes: Tracks your Trinket Cooldown. Extended fork of Trinket Cooldown Tracker by Naíxx.
+## Author: Naíxx (original), Christian Isaman (extended)
+## Version: 1.0.2
 ## SavedVariables: TrinketTrackerDB
 ## IconTexture: Interface\AddOns\TrinketTracker\icon.blp
+## X-Credits: Based on "Trinket Cooldown Tracker" by Naíxx — https://www.curseforge.com/wow/addons/trinket-cooldown-tracker
 
 
 TrinketTracker.lua
