@@ -8,26 +8,39 @@ local DB
 local trinketSlots = {13, 14}
 local buttons = {}
 
+-- TODO: fill in current-patch item IDs
+local trackedItems = {
+    { key = "reckless",  itemID = 241288, dbFlag = "showReckless",  label = "Potion of Recklessness" },
+    { key = "healthpot", itemID = 241304, dbFlag = "showHealthPot", label = "Health Potion" },
+}
+local itemButtons = {}
+
+local function ApplyPosition(btn, posKey)
+    local pos = DB and DB.positions and DB.positions[posKey]
+    if pos and #pos == 5 then
+        local point, relName, relativePoint, xOfs, yOfs = unpack(pos)
+        local relFrame
+        if relName == "UIParent" then
+            relFrame = UIParent
+        else
+            relFrame = _G[relName]
+        end
+        if relFrame then
+            btn:ClearAllPoints()
+            btn:SetPoint(point, relFrame, relativePoint, xOfs, yOfs)
+        end
+    else
+        btn:ClearAllPoints()
+        btn:SetPoint("CENTER")
+    end
+end
+
 local function ApplyButtonPositions()
     for i, btn in ipairs(buttons) do
-        local slot = trinketSlots[i]
-        local pos = DB and DB.positions and DB.positions[slot]
-        if pos and #pos == 5 then
-            local point, relName, relativePoint, xOfs, yOfs = unpack(pos)
-            local relFrame
-            if relName == "UIParent" then
-                relFrame = UIParent
-            else
-                relFrame = _G[relName]
-            end
-            if relFrame then
-				btn:ClearAllPoints()
-				btn:SetPoint(point, relFrame, relativePoint, xOfs, yOfs)
-			end
-        else
-            btn:ClearAllPoints()
-			btn:SetPoint("CENTER")
-        end
+        ApplyPosition(btn, trinketSlots[i])
+    end
+    for _, btn in ipairs(itemButtons) do
+        ApplyPosition(btn, btn.posKey)
     end
 end
 
@@ -66,6 +79,72 @@ local function CreateTrinketButton(slot)
     return btn
 end
 
+local function CreateItemButton(item)
+    local btn = CreateFrame("Button", "TrinketItemButton"..item.itemID, UIParent, "BackdropTemplate")
+    btn:SetSize(40, 40)
+
+    btn.icon = btn:CreateTexture(nil, "BACKGROUND")
+    btn.icon:SetAllPoints()
+
+    btn.cooldown = CreateFrame("Cooldown", nil, btn, "CooldownFrameTemplate")
+    btn.cooldown:SetAllPoints()
+
+    btn.itemID = item.itemID
+    btn.posKey = "item:"..item.itemID
+
+    local function SaveButtonPosition(self)
+        if not DB then return end
+        local point, relativeTo, relativePoint, xOfs, yOfs = self:GetPoint()
+        local relName = relativeTo and relativeTo:GetName() or "UIParent"
+        DB.positions[self.posKey] = { point, relName, relativePoint, xOfs, yOfs }
+    end
+
+    btn:SetMovable(true)
+    btn:EnableMouse(true)
+    btn:RegisterForDrag("LeftButton")
+    btn:SetScript("OnDragStart", function(self)
+        if DB and not DB.locked then
+            self:StartMoving()
+        end
+    end)
+    btn:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        SaveButtonPosition(self)
+    end)
+
+    return btn
+end
+
+local function CancelCooldownAlert(btn)
+    if btn.cdTimer then
+        btn.cdTimer:Cancel()
+        btn.cdTimer = nil
+    end
+    btn.cdStart = nil
+    btn.cdDuration = nil
+end
+
+local function ScheduleCooldownAlert(btn, start, duration, enable)
+    if btn.cdStart == start and btn.cdDuration == duration then return end
+    btn.cdStart = start
+    btn.cdDuration = duration
+    if btn.cdTimer then
+        btn.cdTimer:Cancel()
+        btn.cdTimer = nil
+    end
+    if enable == 1 and start and start > 0 and duration and duration > 1.5 then
+        local remaining = (start + duration) - GetTime()
+        if remaining > 0 then
+            btn.cdTimer = C_Timer.NewTimer(remaining, function()
+                if DB and DB.playReadySound then
+                    PlaySound(SOUNDKIT.RAID_WARNING, "Master")
+                end
+                btn.cdTimer = nil
+            end)
+        end
+    end
+end
+
 local function UpdateTrinkets()
     if not DB then return end
 
@@ -81,6 +160,27 @@ local function UpdateTrinkets()
 
             local start, duration, enable = GetInventoryItemCooldown("player", slot)
             CooldownFrame_Set(btn.cooldown, start, duration, enable)
+            ScheduleCooldownAlert(btn, start, duration, enable)
+        else
+            btn:Hide()
+            CancelCooldownAlert(btn)
+        end
+    end
+end
+
+local function UpdateItems()
+    if not DB then return end
+
+    for i, item in ipairs(trackedItems) do
+        local btn = itemButtons[i]
+        if not btn then break end
+
+        local count = item.itemID > 0 and C_Item.GetItemCount(item.itemID) or 0
+        if count and count > 0 and DB[item.dbFlag] then
+            btn.icon:SetTexture(C_Item.GetItemIconByID(item.itemID))
+            local start, duration, enable = C_Container.GetItemCooldown(item.itemID)
+            CooldownFrame_Set(btn.cooldown, start, duration, enable)
+            btn:Show()
         else
             btn:Hide()
         end
@@ -91,6 +191,8 @@ TrinketTracker:RegisterEvent("PLAYER_LOGIN")
 TrinketTracker:RegisterEvent("PLAYER_ENTERING_WORLD")
 TrinketTracker:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 TrinketTracker:RegisterEvent("BAG_UPDATE_COOLDOWN")
+TrinketTracker:RegisterEvent("BAG_UPDATE")
+TrinketTracker:RegisterEvent("SPELL_UPDATE_COOLDOWN")
 
 TrinketTracker:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
@@ -102,21 +204,32 @@ TrinketTracker:SetScript("OnEvent", function(self, event, ...)
             positions = {},
             menuPos = { "CENTER", "CENTER", 0, 0 },
             showTrinket1 = true,
-            showTrinket2 = true
+            showTrinket2 = true,
+            showReckless = true,
+            showHealthPot = true,
+            playReadySound = true,
         }
 
         DB = TrinketTrackerDB[playerKey]
         DB.positions = DB.positions or {}
+        if DB.showReckless   == nil then DB.showReckless   = true end
+        if DB.showHealthPot  == nil then DB.showHealthPot  = true end
+        if DB.playReadySound == nil then DB.playReadySound = true end
 
         for _, btn in ipairs(buttons) do
+            btn:SetScale(DB.scale)
+        end
+        for _, btn in ipairs(itemButtons) do
             btn:SetScale(DB.scale)
         end
 
         ApplyButtonPositions()
         UpdateTrinkets()
+        UpdateItems()
 
     else
         UpdateTrinkets()
+        UpdateItems()
     end
 end)
 
@@ -124,8 +237,12 @@ for i, slot in ipairs(trinketSlots) do
     buttons[i] = CreateTrinketButton(slot)
 end
 
+for i, item in ipairs(trackedItems) do
+    itemButtons[i] = CreateItemButton(item)
+end
+
 local configFrame = CreateFrame("Frame", "TrinketTrackerConfig", UIParent, "BackdropTemplate")
-configFrame:SetSize(240, 180)
+configFrame:SetSize(240, 255)
 configFrame:SetMovable(true)
 configFrame:EnableMouse(true)
 configFrame:RegisterForDrag("LeftButton")
@@ -180,6 +297,9 @@ slider:SetScript("OnValueChanged", function(self, value)
     for _, btn in ipairs(buttons) do
         btn:SetScale(value)
     end
+    for _, btn in ipairs(itemButtons) do
+        btn:SetScale(value)
+    end
 end)
 if slider.Low then slider.Low:SetText("0.5") end
 if slider.High then slider.High:SetText("2") end
@@ -203,6 +323,32 @@ showTrinket2Check:SetScript("OnClick", function(self)
     UpdateTrinkets()
 end)
 
+local showRecklessCheck = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
+showRecklessCheck:SetPoint("TOPLEFT", 20, -165)
+showRecklessCheck.text:SetText("Show Recklessness Potion")
+showRecklessCheck:SetScript("OnClick", function(self)
+    if not DB then return end
+    DB.showReckless = self:GetChecked()
+    UpdateItems()
+end)
+
+local showHealthPotCheck = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
+showHealthPotCheck:SetPoint("TOPLEFT", 20, -190)
+showHealthPotCheck.text:SetText("Show Health Potion")
+showHealthPotCheck:SetScript("OnClick", function(self)
+    if not DB then return end
+    DB.showHealthPot = self:GetChecked()
+    UpdateItems()
+end)
+
+local playReadySoundCheck = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
+playReadySoundCheck:SetPoint("TOPLEFT", 20, -215)
+playReadySoundCheck.text:SetText("Play Sound When Trinket Ready")
+playReadySoundCheck:SetScript("OnClick", function(self)
+    if not DB then return end
+    DB.playReadySound = self:GetChecked()
+end)
+
 configFrame:Hide()
 
 SLASH_TRINKETTRACKER1 = "/trinket"
@@ -216,6 +362,9 @@ SlashCmdList["TRINKETTRACKER"] = function()
             slider:SetValue(DB.scale)
             showTrinket1Check:SetChecked(DB.showTrinket1)
             showTrinket2Check:SetChecked(DB.showTrinket2)
+            showRecklessCheck:SetChecked(DB.showReckless)
+            showHealthPotCheck:SetChecked(DB.showHealthPot)
+            playReadySoundCheck:SetChecked(DB.playReadySound)
 
             if DB.menuPos and #DB.menuPos == 4 then
                 configFrame:ClearAllPoints()
