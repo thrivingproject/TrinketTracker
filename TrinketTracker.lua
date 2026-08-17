@@ -9,9 +9,20 @@ local trinketSlots = {13, 14}
 local buttons = {}
 
 -- TODO: fill in current-patch item IDs
+-- altItemIDs lists replacement variants of the same consumable (checked before itemID).
+-- Healthstone becomes Demonic Healthstone for warlocks specced into Pact of Gluttony;
+-- Light's Potential Potion has two item IDs for its quality variants.
+-- showCount draws how many uses you have in the corner of the button: charges for items
+-- that have them (Demonic Healthstone), stack count for everything else.
 local trackedItems = {
-    { key = "reckless",  itemID = 241288, dbFlag = "showReckless",  label = "Potion of Recklessness" },
-    { key = "healthpot", itemID = 241304, dbFlag = "showHealthPot", label = "Health Potion" },
+    { key = "reckless",    itemID = 241288, dbFlag = "showReckless",    label = "Potion of Recklessness",
+      showCount = true },
+    { key = "healthpot",   itemID = 241304, dbFlag = "showHealthPot",   label = "Health Potion",
+      showCount = true },
+    { key = "lightspot",   itemID = 241308, dbFlag = "showLightsPot",   label = "Light's Potential Potion",
+      altItemIDs = { 241309 }, showCount = true },
+    { key = "healthstone", itemID = 5512,   dbFlag = "showHealthstone", label = "Healthstone",
+      altItemIDs = { 224464 }, showCount = true },
 }
 local itemButtons = {}
 
@@ -88,6 +99,17 @@ local function CreateItemButton(item)
 
     btn.cooldown = CreateFrame("Cooldown", nil, btn, "CooldownFrameTemplate")
     btn.cooldown:SetAllPoints()
+
+    if item.showCount then
+        -- Own frame above the cooldown, otherwise the swipe covers the number.
+        local countLayer = CreateFrame("Frame", nil, btn)
+        countLayer:SetAllPoints()
+        countLayer:SetFrameLevel(btn.cooldown:GetFrameLevel() + 1)
+
+        btn.countText = countLayer:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+        btn.countText:SetPoint("BOTTOMRIGHT", -2, 2)
+        btn.countText:SetJustifyH("RIGHT")
+    end
 
     btn.itemID = item.itemID
     btn.posKey = "item:"..item.itemID
@@ -168,6 +190,24 @@ local function UpdateTrinkets()
     end
 end
 
+-- With includeUses set, GetItemCount reports total charges instead of item count, so a
+-- single 3-charge Demonic Healthstone reads 3. Items without charges are unaffected.
+local function CountFor(itemID)
+    return C_Item.GetItemCount(itemID, false, true) or 0
+end
+
+-- Returns the item ID the player actually carries for this entry, and how many uses it has.
+local function ResolveItemID(item)
+    if item.altItemIDs then
+        for _, id in ipairs(item.altItemIDs) do
+            local count = CountFor(id)
+            if count > 0 then return id, count end
+        end
+    end
+    local count = item.itemID > 0 and CountFor(item.itemID) or 0
+    return item.itemID, count
+end
+
 local function UpdateItems()
     if not DB then return end
 
@@ -175,10 +215,13 @@ local function UpdateItems()
         local btn = itemButtons[i]
         if not btn then break end
 
-        local count = item.itemID > 0 and C_Item.GetItemCount(item.itemID) or 0
-        if count and count > 0 and DB[item.dbFlag] then
-            btn.icon:SetTexture(C_Item.GetItemIconByID(item.itemID))
-            local start, duration, enable = C_Container.GetItemCooldown(item.itemID)
+        local itemID, count = ResolveItemID(item)
+        if count > 0 and DB[item.dbFlag] then
+            btn.icon:SetTexture(C_Item.GetItemIconByID(itemID))
+            if btn.countText then
+                btn.countText:SetText(count)
+            end
+            local start, duration, enable = C_Container.GetItemCooldown(itemID)
             CooldownFrame_Set(btn.cooldown, start, duration, enable)
             btn:Show()
         else
@@ -207,14 +250,18 @@ TrinketTracker:SetScript("OnEvent", function(self, event, ...)
             showTrinket2 = true,
             showReckless = true,
             showHealthPot = true,
+            showLightsPot = true,
+            showHealthstone = true,
             playReadySound = true,
         }
 
         DB = TrinketTrackerDB[playerKey]
         DB.positions = DB.positions or {}
-        if DB.showReckless   == nil then DB.showReckless   = true end
-        if DB.showHealthPot  == nil then DB.showHealthPot  = true end
-        if DB.playReadySound == nil then DB.playReadySound = true end
+        if DB.showReckless    == nil then DB.showReckless    = true end
+        if DB.showHealthPot   == nil then DB.showHealthPot   = true end
+        if DB.showLightsPot   == nil then DB.showLightsPot   = true end
+        if DB.showHealthstone == nil then DB.showHealthstone = true end
+        if DB.playReadySound  == nil then DB.playReadySound  = true end
 
         for _, btn in ipairs(buttons) do
             btn:SetScale(DB.scale)
@@ -242,7 +289,7 @@ for i, item in ipairs(trackedItems) do
 end
 
 local configFrame = CreateFrame("Frame", "TrinketTrackerConfig", UIParent, "BackdropTemplate")
-configFrame:SetSize(240, 255)
+configFrame:SetSize(240, 305)
 configFrame:SetMovable(true)
 configFrame:EnableMouse(true)
 configFrame:RegisterForDrag("LeftButton")
@@ -341,8 +388,26 @@ showHealthPotCheck:SetScript("OnClick", function(self)
     UpdateItems()
 end)
 
+local showLightsPotCheck = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
+showLightsPotCheck:SetPoint("TOPLEFT", 20, -215)
+showLightsPotCheck.text:SetText("Show Light's Potential Potion")
+showLightsPotCheck:SetScript("OnClick", function(self)
+    if not DB then return end
+    DB.showLightsPot = self:GetChecked()
+    UpdateItems()
+end)
+
+local showHealthstoneCheck = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
+showHealthstoneCheck:SetPoint("TOPLEFT", 20, -240)
+showHealthstoneCheck.text:SetText("Show Healthstone")
+showHealthstoneCheck:SetScript("OnClick", function(self)
+    if not DB then return end
+    DB.showHealthstone = self:GetChecked()
+    UpdateItems()
+end)
+
 local playReadySoundCheck = CreateFrame("CheckButton", nil, configFrame, "UICheckButtonTemplate")
-playReadySoundCheck:SetPoint("TOPLEFT", 20, -215)
+playReadySoundCheck:SetPoint("TOPLEFT", 20, -265)
 playReadySoundCheck.text:SetText("Play Sound When Trinket Ready")
 playReadySoundCheck:SetScript("OnClick", function(self)
     if not DB then return end
@@ -364,6 +429,8 @@ SlashCmdList["TRINKETTRACKER"] = function()
             showTrinket2Check:SetChecked(DB.showTrinket2)
             showRecklessCheck:SetChecked(DB.showReckless)
             showHealthPotCheck:SetChecked(DB.showHealthPot)
+            showLightsPotCheck:SetChecked(DB.showLightsPot)
+            showHealthstoneCheck:SetChecked(DB.showHealthstone)
             playReadySoundCheck:SetChecked(DB.playReadySound)
 
             if DB.menuPos and #DB.menuPos == 4 then
